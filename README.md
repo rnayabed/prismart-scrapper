@@ -17,4 +17,4 @@ pip install -r requirements.txt
 
 ## License
 
-GPLv3
+[GNU General Public License v3.0](https://github.com/rnayabed/prismart-scrapper/blob/master/LICENSE)
