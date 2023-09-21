@@ -1,0 +1,4 @@
+venv/
+colour-logs/
+*.dat
+*.bin
