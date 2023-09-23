@@ -40,6 +40,12 @@ def touch_screen(x, y):
     subprocess.run(['adb' , 'shell', 'input', 'tap' , str(x), str(y)])
     touch_sleep()
 
+def touch_and_hold_screen(x, y):
+    subprocess.run(['adb' , 'shell', 'input', 'motionevent', 'DOWN', str(x), str(y)])
+    touch_sleep()
+    subprocess.run(['adb' , 'shell', 'input', 'motionevent', 'UP', str(x), str(y)])
+    touch_sleep()
+
 def scroll_screen_full():
     subprocess.run(['adb', 'shell', 'input', 'roll', '0', '13'])
     touch_sleep()
@@ -126,6 +132,7 @@ class LogColourType(enum.Enum):
     IGNORED = 2
     IGNORED_BECAUSE_ALREADY_ADDED = 3
     ADDED_BUT_RECTIFIED = 4
+    SILENT_IGNORE = 5
 
     def get_ui_value(type):
         match type:
@@ -133,6 +140,7 @@ class LogColourType(enum.Enum):
             case LogColourType.IGNORED: return "ignored"
             case LogColourType.IGNORED_BECAUSE_ALREADY_ADDED: return "ignored_because_already_added"
             case LogColourType.ADDED_BUT_RECTIFIED: return "added_but_rectified"
+            case LogColourType.SILENT_IGNORE: return "silent_ignore"
 
 def log_colour(base_code, colour_code, collection, type: LogColourType):
     global log_folder_path
@@ -142,13 +150,7 @@ def log_colour(base_code, colour_code, collection, type: LogColourType):
     f.writelines([f'base_code: {base_code}\n', f'colour_code: {colour_code}\n', f'collection: {collection}\n','\n'])
     f.close()
 
-def register_paint_details():
-    img = PIL.Image.open(take_screenshot())
-    
-    while (get_screen_type_img(img) != ScreenType.ADJUST_FORMULA):
-        chime.warning()
-        input("WARNING: Screen not in adjust formula. Please fix. Enter to continue")
-
+def register_paint_details(img):
     lines = pt.image_to_string(img).replace('\n\n','\n').split('\n')
 
     colour_name = None
@@ -157,28 +159,43 @@ def register_paint_details():
     base_name = None
     base_code = None
 
-    component_mode = False
-    component_mode_done = False
-    
-    components_temp = []
-    components = {}
+    #component_mode = False
+    #component_mode_done = False
+    #components_temp = []
+    #comp_two_mode = True
+    #comp_mode_selected = False
 
-    comp_two_mode = True
-    comp_mode_selected = False
+
+    components = {}
 
     print('Lines::', lines)
     
     for line_num in range(len(lines)):
-        if 'Formula Name :' in lines[line_num]:
+        if 'Formula Name' in lines[line_num]:
             colour_name = lines[line_num + 1].strip().upper()
-        elif 'Color Code :' in lines[line_num]:
-            colour_code = lines[line_num].replace('Color Code :', '').strip().upper()
-        elif 'Collection :' in lines[line_num]:
-            collection = lines[line_num].replace('Collection :', '').strip().upper()
+        elif 'Color Code' in lines[line_num]:
+            colour_code = lines[line_num].replace('Color Code', '').replace(':', '').strip().upper()
+        elif 'Collection' in lines[line_num]:
+            collection = lines[line_num].replace('Collection', '').replace(':', '').strip().upper()
         elif 'Product Name' in lines[line_num]:
             base_name = lines[line_num + 1].replace(' >', '').strip().upper()
         elif 'Base' in lines[line_num]:
             base_code = lines[line_num + 1].replace(' >', '').strip().upper()
+        elif lines[line_num].strip().endswith(' MI'):
+            txt = lines[line_num]
+            mi_count = txt.count(' MI')
+
+            if mi_count == 1:
+                components[lines[line_num - 1].strip().upper()] = float(txt.replace(' MI', '').strip())
+            elif mi_count == 2:
+                ly = txt.strip().replace(' MI', '').split(' ')
+                lx = lines[line_num - 1].strip().upper().split(' ')
+
+                components[lx[0]] = float(ly[0])
+                components[lx[1]] = float(ly[1])
+
+
+        '''
         elif not component_mode_done:
             txt = lines[line_num]
 
@@ -210,10 +227,25 @@ def register_paint_details():
 
                     print('TWO MODE? ', comp_two_mode)
                     comp_mode_selected = True
-
-        
+        '''
+    
+    '''
     if comp_two_mode:
         components = {}
+        print('components_temp', components_temp)
+
+        for i in range(0, len(components_temp)):
+            # Two or One count
+            if components_temp[i].count('.') == 2:
+                # Two count
+                ly = components_temp[i].split(' ')
+                lx = components_temp[i - 1].split(' ')
+                components[lx[0]] = float(ly[0])
+                components[lx[1]] = float(ly[1])
+            else:
+                components[lx[0]] = float(components_temp[i])
+
+        
         # Rare mode
         rare_mode = True
         for i in range(0, len(components_temp)):
@@ -240,7 +272,8 @@ def register_paint_details():
                     # Two mode
                     components[components_temp[i]] = float(components_temp[i + 2])
                     components[components_temp[i + 1]] = float(components_temp[i + 3])
-    
+        
+    '''
 
     return (base_code, base_name, colour_code, colour_name, components, collection)
 
@@ -363,7 +396,7 @@ def db_check_colour_exists(base_code, base_name, colour_code, colour_name, colle
     if len(yy) == 0: return False
     base_id = yy[0]
 
-    db_cur.execute("SELECT * FROM colour WHERE code=%s AND name=%s AND collection=%s AND base=%s", 
+    db_cur.execute("SELECT * FROM colour WHERE code=%s AND name=%s AND collection=%s AND base=%s;", 
         (colour_code, colour_name, collection_id, base_id))
     return True if len(db_cur.fetchall()) > 0 else False
     
@@ -374,13 +407,25 @@ def db_save(base_code, base_name, colour_code, colour_name, components, collecti
 
     # add collection
     db_cur.execute("INSERT INTO collection(name) VALUES (%s) ON CONFLICT(name) DO NOTHING;", (collection,))
-    db_cur.execute("SELECT id from collection WHERE name=%s", (collection,))
-    collection_id = db_cur.fetchone()
+    db_cur.execute("SELECT id from collection WHERE name=%s;", (collection,))
+    collection_id = db_cur.fetchone()[0]
     
     # add base
-    db_cur.execute("INSERT INTO base(code, name) VALUES (%s, %s) ON CONFLICT(id) DO NOTHING;", (base_code, base_name))
-    db_cur.execute("SELECT id FROM base WHERE code=%s AND name=%s", (base_code, base_name))
-    base_id = db_cur.fetchone()
+    db_cur.execute("SELECT id FROM base WHERE code=%s AND name=%s;", (base_code, base_name))
+    xy = db_cur.fetchall()
+    base_id=-1
+    if len(xy) == 0:
+        db_cur.execute("INSERT INTO base(code, name) VALUES (%s, %s);", (base_code, base_name))
+        db_cur.execute("SELECT id FROM base WHERE code=%s AND name=%s;", (base_code, base_name))
+        base_id = db_cur.fetchone()[0]
+    else:
+        print('BASE EXIST!', xy[0])
+        base_id = xy[0]
+    
+    print('base_id', base_id)
+
+   
+    
 
     colourants_l = []
     colourants_quantity_l = []
@@ -390,7 +435,7 @@ def db_save(base_code, base_name, colour_code, colour_name, components, collecti
         colourants_l.append(c)
         colourants_quantity_l.append(d)
 
-    db_cur.execute("SELECT * FROM colour WHERE code=%s AND name=%s AND collection=%s AND base=%s", 
+    db_cur.execute("SELECT * FROM colour WHERE code=%s AND name=%s AND collection=%s AND base=%s;", 
         (colour_code, colour_name, collection_id, base_id))
     if len(db_cur.fetchall()) > 0:
         print('Already exists! Ignored')
@@ -422,6 +467,9 @@ def get_q_index(list):
             break
     return q_index
 
+class AppCrashed(Exception):
+    pass
+
 def register_from_current_colour_pallete():
 
     colour_number = 0
@@ -434,6 +482,7 @@ def register_from_current_colour_pallete():
             continue
         break
 
+    global collection_name
     collection_name = pt.image_to_string(img.crop((102, 69, 771, 138))).replace('@', '') \
             .replace('|', '') \
             .replace(' po', '') \
@@ -442,10 +491,11 @@ def register_from_current_colour_pallete():
 
     gap = 170
     max_per_screen = 10
-    ref_loc = (436, 306)
+    ref_loc = (436, 326)
     
     old_colour_data = None
     new_colour_data = list(filter(lambda x: x != '', pt.image_to_string(PIL.Image.open(take_screenshot())).split('\n')))
+
 
     while old_colour_data != new_colour_data:
         colour_index = 0
@@ -454,9 +504,10 @@ def register_from_current_colour_pallete():
             
 
             if l == len(new_colour_data) - 1: break
-            if len(new_colour_data[l].strip()) < 2: continue # Avoid single character
-            if len(new_colour_data[l].strip()) == 0 or len(new_colour_data[l+1].strip()) == 0: continue
-
+            xlenxx = len(new_colour_data[l].strip())
+            xlenxx_next = len(new_colour_data[l+1].strip())
+            if (xlenxx < 2 or xlenxx_next < 2) or (xlenxx == 0 or xlenxx_next == 0): continue
+                   
             colour_name = new_colour_data[l].strip().upper()
             colour_code = new_colour_data[l+1].strip().upper()
 
@@ -492,9 +543,10 @@ def register_from_current_colour_pallete():
                 for l in range(get_q_index(new_base_data) + 1, len(new_base_data), 2):
 
                     if l == len(new_base_data) - 1: break
-                    if len(new_base_data[l].strip()) < 2: continue # Avoid single character
-                    if len(new_base_data[l].strip()) == 0 or len(new_base_data[l+1].strip()) == 0: continue
-                    
+                    lenxx = len(new_base_data[l].strip())
+                    lenxx_next = len(new_base_data[l+1].strip())
+                    if (lenxx < 2 or lenxx_next < 2) or (lenxx == 0 or lenxx_next == 0): continue
+                   
 
                     base_name = new_base_data[l].strip().upper()
                     base_code = new_base_data[l+1].strip().upper()
@@ -514,24 +566,51 @@ def register_from_current_colour_pallete():
                     touch_sleep()
                     touch_screen(1143, 87)
 
+                    print(f'Trying to enter {base_name}, {base_code}, {colour_name}, {colour_code}')
 
+
+                    il_ignore = False
                     while True:
                         # get data
+
+                        img = None
+                        while True:
+                            img = PIL.Image.open(take_screenshot())
+                            if get_screen_type_img(img) == ScreenType.ADJUST_FORMULA: break
+                            chime.warning()
+                            print("WARNING: Screen not in adjust formula. Please fix. Enter to continue")
+                            if silent_ignore:
+                                raise AppCrashed
+                            else:
+                                input()
+
+
                         try:
-                            final_base_code, final_base_name, final_colour_code, final_colour_name, final_components, final_collection = register_paint_details()
+                            final_base_code, final_base_name, final_colour_code, final_colour_name, final_components, final_collection = register_paint_details(img)
                             break
                         except:
                             traceback.print_exc()
                             print('Failed to register paint_details!')
                             chime.error()
-                            choice = input('Retry [anything], Ignore this and continue [I] : ')
+
+                            choice = 'sdf'
+
+                            if silent_ignore:
+                                print('ignoring')
+                                choice = 'I'
+                            else:
+                                choice = input('Retry [anything], Ignore this and continue [I] : ')
+
                             if choice == 'I':
                                 print('Skipping ...')
                                 log_colour(base_code, colour_code, collection_name, LogColourType.IGNORED)
                                 go_back()
                                 go_back()
                                 print()
-                                continue
+                                il_ignore = True
+                                break
+                    
+                    if il_ignore: continue
 
                     print()
                     print('===New entry details===')
@@ -540,7 +619,7 @@ def register_from_current_colour_pallete():
                     print('Base Name:', final_base_name)
                     print('Colour Code:', final_colour_code)
                     print('Colour Name:', final_colour_name)
-                    print('Components:', final_components)
+                    print('Components:', len(final_components), final_components)
                     print('Collection:', final_collection)
 
                     confirm_input = False
@@ -550,28 +629,43 @@ def register_from_current_colour_pallete():
                     if final_colour_name != colour_name:
                         chime.warning()
                         confirm_input = True
-                        input("WARNING! Mismatch colour name (Org: '"+colour_name+"'. Screen: '"+final_colour_name+"'")
+                        print("WARNING! Mismatch colour name (Org: '"+colour_name+"'. Screen: '"+final_colour_name+"'")
                     
                     if final_colour_code != colour_code:
                         chime.warning()
                         confirm_input = True
-                        input("WARNING! Mismatch colour code (Org: '"+colour_code+"'. Screen: '"+final_colour_code+"')")
+                        print("WARNING! Mismatch colour code (Org: '"+colour_code+"'. Screen: '"+final_colour_code+"')")
                     
                     if final_base_name != base_name:
                         chime.warning()
                         confirm_input = True
-                        input("WARNING! Mismatch base name (Org: '"+base_name+"'. Screen: '"+final_base_name+"')")
+                        print("WARNING! Mismatch base name (Org: '"+base_name+"'. Screen: '"+final_base_name+"')")
                     
                     if final_base_code != base_code:
-                        chime.warning()
-                        confirm_input = True
-                        input("WARNING! Mismatch base code (Org: '"+base_code+"'. Screen: '"+final_base_code+"')")
+                        if base_code.replace(' A)', '') == final_base_code:
+                            base_code = base_code.replace(' A)','')
+                            print('Fixed minor base code problem')
+                        else:
+                            chime.warning()
+                            confirm_input = True
+                            print("WARNING! Mismatch base code (Org: '"+base_code+"'. Screen: '"+final_base_code+"')")
                     
                     if final_collection != collection_name:
                         chime.warning()
                         confirm_input = True
-                        input("WARNING! Mismatch base code (Org: '"+collection_name+"'. Screen: '"+final_collection+"')")
+                        print("WARNING! Mismatch base code (Org: '"+collection_name+"'. Screen: '"+final_collection+"')")
                     
+                    if confirm_input:
+                        if silent_ignore:
+                            print("SILENT IGNORED")
+                            print('Skipping ...')
+                            log_colour(base_code, colour_code, collection_name, LogColourType.SILENT_IGNORE)
+                            go_back()
+                            go_back()
+                            print()
+                            continue
+                        else:
+                            input()
                 
 
                     while confirm_input:
@@ -658,16 +752,123 @@ def register_from_current_colour_pallete():
         old_colour_data = new_colour_data
         new_colour_data = list(filter(lambda x: len(x.strip()) > 0, pt.image_to_string(PIL.Image.open(take_screenshot())).split('\n')))
 
+def touch_type(text):
+    subprocess.run(['adb', 'shell', 'input', 'text', text.replace(' ', '%s')])
+    touch_sleep()
+
+def start_app():
+    # Home
+    print('Press home')
+    touch_screen(600, 1956)
+    time.sleep(2)
+
+    # Force stop PrismaRT
+    print('Force stop PrismaRT')
+    touch_and_hold_screen(714, 1131)
+    time.sleep(1)
+    touch_screen(600, 981)
+    time.sleep(1)
+    touch_screen(492, 1830)
+
+    if 'misbehave' in pt.image_to_string(PIL.Image.open(take_screenshot())):
+        touch_screen(720, 1101)
+
+    time.sleep(2)
+
+    print('Press home')
+    touch_screen(600, 1956)
+    time.sleep(2)
+
+    # PrismaRT app
+    print('Open PrismaRT')
+    touch_screen(714, 1131)
+
+    print('Wait for initialise')
+    time.sleep(13)
+
+    while True:
+        img = PIL.Image.open(take_screenshot())
+        if (get_screen_type_img(img) != ScreenType.HOME):
+            input('Failed to launch app. Please manually do so.')
+            continue
+            
+        if 'Ready' not in pt.image_to_string(img.crop((562, 160, 672, 199))):
+            input('System not ready yet! You need to connect to the printer')
+            continue
+        
+        break
+
+    # Click standard dispense
+    print('Open Standard Dispense')
+    touch_screen(307, 464)
+    time.sleep(2)
+
+    # Click collection search
+    print('Open Collection Search')
+    touch_screen(540, 1047)
+    time.sleep(1)
+
+    # Move home shortcut (360, 1392)
+    print('Move home shortcut')
+    subprocess.run(['adb', 'shell', 'input', 'swipe', '360', '1392', '963', '1392', '300'])
+    time.sleep(1)
+
+    # Click text box
+    print('Click input text box')
+    touch_screen(111,206)
+    
+    global collection_name
+    # Type collection name
+    touch_type(collection_name)
+    time.sleep(2)
+
+    # Press on it
+    touch_screen(555, 318)
+
+    global db_cur
+    db_cur.execute('SELECT id FROM collection WHERE NAME=%s;', (collection_name, ))
+    collection_id = db_cur.fetchone()[0]
+
+    db_cur.execute('SELECT DISTINCT name FROM colour WHERE collection=%s ORDER BY name DESC LIMIT 1;',
+        (collection_id, ))
+    top_colours_list = db_cur.fetchall()
+
+    if len(top_colours_list) == 0:
+        return
+
+    colour_to_swipe_to = top_colours_list[0][0]
+
+    print('Colour to scroll to', colour_to_swipe_to)
+
+    while True:
+        if colour_to_swipe_to in pt.image_to_string(PIL.Image.open(take_screenshot())):
+            break
+
+        scroll_screen_full()
+
 log_folder_path = datetime.datetime.today().strftime("colour-logs/%Y-%m-%d %H:%M:%S/")
+silent_ignore = True
+collection_name = 'APL COLOURPALETTE'
 
 if len(sys.argv) != 5:
     print("Invalid args")
     exit()
 
+db_connect(sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4])
+chime.theme('big-sur')
+
+def main():
+    try:        
+        if get_screen_type() != ScreenType.SEARCH_BASE:
+            start_app()
+        register_from_current_colour_pallete()
+    except AppCrashed: # Will only trigger if silent_ignore is True, for now
+        print('====APP CRASHED====')
+        print('Restarting...')
+        main()
+
 try:
-    db_connect(sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4])
-    chime.theme('big-sur')
-    register_from_current_colour_pallete() 
+    main()
 except KeyboardInterrupt:
     print()
     print('Interrupted mid execution!')
